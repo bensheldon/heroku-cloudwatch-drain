@@ -16,6 +16,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
+	"github.com/getsentry/raven-go"
 	"github.com/honeybadger-io/honeybadger-go"
 	"github.com/jcxplorer/cwlogger"
 	"github.com/kiskolabs/heroku-cloudwatch-drain/logparser"
@@ -90,6 +91,8 @@ func main() {
 		},
 	)
 
+	raven.SetDSN(os.Getenv("SENTRY_DSN"))
+
 	mux := http.NewServeMux()
 	mux.Handle(newrelic.WrapHandle(nrApp, "/", honeybadger.Handler(app)))
 	err = graceful.RunWithErr(bind, 5*time.Second, mux)
@@ -154,6 +157,7 @@ func (app *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err = app.processMessages(r.Body, l, txn); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		honeybadger.Notify(err)
+		raven.CaptureError(err, nil)
 		log.Println(err)
 		return
 	}
@@ -187,6 +191,7 @@ func (app *App) logger(appName string) (l logger, err error) {
 			Client:       cloudwatchlogs.New(session.New()),
 			ErrorReporter: func(err error) {
 				honeybadger.Notify(err)
+				raven.CaptureError(err, nil)
 			},
 		})
 		app.loggers[appName] = l
@@ -207,6 +212,7 @@ func (app *App) processMessages(r io.Reader, l logger, txn newrelic.Transaction)
 				eof = true
 			} else {
 				honeybadger.Notify(err)
+				raven.CaptureError(err, nil)
 				return fmt.Errorf("failed to scan request body: %s", err)
 			}
 		}
@@ -216,6 +222,7 @@ func (app *App) processMessages(r io.Reader, l logger, txn newrelic.Transaction)
 		entry, err := app.parse(b)
 		if err != nil {
 			honeybadger.Notify(err)
+			raven.CaptureError(err, nil)
 			return fmt.Errorf("unable to parse message: %s, error: %s", string(b), err)
 		}
 		m := entry.Message
